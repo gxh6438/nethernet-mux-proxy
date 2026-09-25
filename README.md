@@ -143,6 +143,8 @@ DTLS/SCTP/Xbox 身份验证全部端到端穿透，代理不解密、不感知�
 
 **Windows**：把 `.exe` 放到一个文件夹（例如 `D:\proxy\`），双击运行。第一次运行自动进入设置向导，逐步提问，**直接按回车就用方括号里的默认值**。向导结束后自动启动，窗口不要关（关了代理就停了）。
 
+> **推荐**：直接把程序放进 BDS 文件夹（和 `server.properties` 同一个目录）运行。向导会自动读取 BDS 端口，结束时还会**自动检查并修正 `server.properties` 的常见错误配置**（改前自动备份）。
+
 **Linux**：
 
 ```bash
@@ -166,7 +168,13 @@ chmod +x nethernet-mux-proxy-linux-amd64
 
 ### 三、BDS 侧设置（重要！）
 
-确认 `server.properties`：
+**最省事的做法**：把本程序放在 BDS 目录（`server.properties` 同级）运行——设置向导结束时会自动检查这 3 项，发现问题询问后一键修正（改前自动备份原文件）。也可以随时手动触发：
+
+```bash
+./nethernet-mux-proxy-linux-amd64 -fix-bds
+```
+
+手动检查的话，确认 `server.properties`：
 
 ```properties
 transport=nethernet
@@ -218,9 +226,26 @@ Minecraft 基岩版 → 游戏 → 服务器 → 添加服务器：
 
 优先级：**命令行 flags > 配置文件 > 默认值**。零参数且无配置文件时进入向导。
 
+不想跑向导、想用命令行一键启动的，示例：
+
+```bash
+# 面板服示例：外网 TCP/UDP 都是 29011，内网跑默认端口
+./nethernet-mux-proxy-linux-amd64 \
+  -listen :19132 -bds 127.0.0.1:19132 -mux :19133 \
+  -advertise-ip play.example.com -advertise-port 29011 -advertise-tcp-port 29011 \
+  -fix-bds -save-config
+```
+
+- `-fix-bds`：顺手检查并修正同目录 `server.properties`（改前自动备份）
+- `-save-config`：把上面这串参数**保存进 `proxy.json`**，以后双击/零参数启动即可，不用再输一遍
+
+全部参数：
+
 ```
 -config PATH        指定配置文件路径（JSON）
 -wizard             强制进入交互式设置向导
+-fix-bds            自动检查并修正同目录 server.properties（改前自动备份；建议把程序放在 BDS 目录运行）
+-save-config        把本次启动参数（含默认值）保存到配置文件，下次零参数直接启动
 -listen ADDR        对外 TCP 监听（信令前置，玩家连接的端口）
 -bds ADDR           BDS NetherNet 信令后端（BDS 的 server-port）
 -mux ADDR           UDP mux 监听（所有玩家游戏流量共用）

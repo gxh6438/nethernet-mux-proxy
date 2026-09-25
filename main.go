@@ -16,6 +16,8 @@
 //	./proxy            # 零参数：加载 ./proxy.json，不存在则进入交互式向导
 //	./proxy -config c.json
 //	./proxy -listen :19132 -bds 127.0.0.1:19132 -mux :19133 -advertise-ip 1.2.3.4
+//	./proxy ... -save-config   # 把本次参数写入 proxy.json，下次零参数直接启动
+//	./proxy -fix-bds           # 自动检查并修正同目录 server.properties（建议放在 BDS 目录运行）
 package main
 
 import (
@@ -193,6 +195,8 @@ func parseArgsAndConfig() *options {
 	fs := flag.NewFlagSet("", flag.ExitOnError)
 	cfgPath := fs.String("config", "", "配置文件路径（JSON）")
 	wizard := fs.Bool("wizard", false, "强制进入交互式设置向导")
+	saveCfg := fs.Bool("save-config", false, "把本次启动参数（含默认值）保存到配置文件，下次零参数直接启动")
+	fixBds := fs.Bool("fix-bds", false, "自动检查并修正同目录 server.properties（改前自动备份；建议把程序放在 BDS 目录运行）")
 	listenTCP := fs.String("listen", "", "对外 TCP 监听地址（信令前置，玩家连接的端口）")
 	bdsTCP := fs.String("bds", "", "BDS NetherNet 信令后端（BDS 的 server-port）")
 	muxBind := fs.String("mux", "", "UDP mux 监听地址（所有玩家的游戏流量共用）")
@@ -272,7 +276,68 @@ func parseArgsAndConfig() *options {
 	if *insecure {
 		opts.InsecureClaim = true
 	}
+
+	// -fix-bds：自动检查并修正同目录 server.properties（先于 -save-config，
+	// 这样冲突修正后的新 BDS 端口也能一并保存进配置文件）。
+	if *fixBds {
+		if spPath := findServerProperties(); spPath == "" {
+			log.Printf("[main] -fix-bds：当前目录没有 server.properties，跳过（把程序放到 BDS 目录里运行即可）")
+		} else if data, err := os.ReadFile(spPath); err != nil {
+			log.Printf("[main] -fix-bds：读取 %s 失败：%v", spPath, err)
+		} else {
+			listenP := mustPort(opts.Listen)
+			alt := freeTCPPort(19131, 19130, 19134, 19135, listenP+1)
+			bdsHost, _, _ := net.SplitHostPort(opts.BDS)
+			fix := planServerPropertiesFix(string(data), listenP, alt, hostIsLocal(bdsHost))
+			if len(fix.changes) == 0 {
+				log.Printf("[main] -fix-bds：%s 检查通过，无需修改", spPath)
+			} else {
+				for _, ch := range fix.changes {
+					log.Printf("[main] -fix-bds：%s", ch)
+				}
+				if err := saveServerPropertiesFixed(spPath, data, fix.content); err != nil {
+					log.Printf("[main] -fix-bds：%v（未改动原文件）", err)
+				} else {
+					log.Printf("[main] -fix-bds：已修正 %s（原文件已备份），重启 BDS 后生效", spPath)
+					if fix.newBDSPort != 0 {
+						opts.BDS = bdsHost + ":" + strconv.Itoa(fix.newBDSPort)
+						log.Printf("[main] -fix-bds：BDS 端口已变更，本进程将连接 %s；下次启动请同步修改 -bds（或加 -save-config 保存）", opts.BDS)
+					}
+				}
+			}
+		}
+	}
+
+	// -save-config：把本次有效配置（命令行覆盖 + 默认值归一后的结果）
+	// 写入配置文件，下次零参数启动即用。
+	if *saveCfg {
+		path := *cfgPath
+		if path == "" {
+			path = defaultConfigPath
+		}
+		if err := saveConfig(path, optsToConfig(opts)); err != nil {
+			log.Printf("[main] 保存配置到 %s 失败：%v", path, err)
+		} else {
+			log.Printf("[main] 已保存配置到 %s（下次零参数启动即用）", path)
+		}
+	}
 	return opts
+}
+
+// optsToConfig 运行参数 → 配置文件结构（用于 -save-config 落盘）。
+func optsToConfig(o *options) *config {
+	return &config{
+		Listen:           o.Listen,
+		BDS:              o.BDS,
+		Mux:              o.Mux,
+		AdvertiseIP:      o.AdvertiseIP,
+		AdvertisePort:    o.AdvertisePort,
+		AdvertiseTCPPort: o.AdvertiseTCPPort,
+		Idle:             o.Idle.String(),
+		MaxSessions:      o.MaxSessions,
+		MaxAddrs:         o.MaxAddrs,
+		InsecureClaim:    o.InsecureClaim,
+	}
 }
 
 func anyFlagGiven(fs *flag.FlagSet) bool {

@@ -33,6 +33,9 @@ func runWizard(savePath string) *config {
 	fmt.Println("  怎么填？")
 	fmt.Println("  每一步直接按「回车」= 采用方括号里的推荐值。")
 	fmt.Println("  拿不准就一路回车！")
+	fmt.Println()
+	fmt.Println("  小提示：把本程序放在 BDS 文件夹里（和 server.properties")
+	fmt.Println("  同一个目录）运行，设置完成后会自动检查并修正 BDS 配置。")
 	fmt.Println("----------------------------------------------------------")
 
 	c := &config{}
@@ -64,7 +67,15 @@ func runWizard(savePath string) *config {
 	fmt.Println("  程序需要知道 BDS 在哪，才能把玩家的数据转给它。")
 	fmt.Println("  ▸ 代理和 BDS 在同一台电脑/服务器（最常见）→ 直接回车")
 	fmt.Println("  ▸ BDS 在别的机器 → 填那台机器的地址，如 192.168.1.100:19132")
-	bds := askDefault(w, "地址", "127.0.0.1:19132")
+	spPath := findServerProperties()
+	defBDS := "127.0.0.1:19132"
+	if spPath != "" {
+		if p := readServerPort(spPath); p != 0 {
+			defBDS = "127.0.0.1:" + strconv.Itoa(p)
+			fmt.Printf("  （检测到程序就放在 BDS 目录里，已从 server.properties 读到端口 %d）\n", p)
+		}
+	}
+	bds := askDefault(w, "地址", defBDS)
 	for {
 		if _, _, err := net.SplitHostPort(bds); err != nil {
 			fmt.Println("      × 格式应为 IP:端口，例如 127.0.0.1:19132")
@@ -155,6 +166,50 @@ func runWizard(savePath string) *config {
 		c.AdvertisePort = p
 	}
 
+	// ── 自动检查并修正 server.properties ──
+	fmt.Println()
+	fmt.Println("----------------------------------------------------------")
+	fmt.Println("        自动检查 BDS 配置（server.properties）")
+	fmt.Println("----------------------------------------------------------")
+	spFixed := false
+	if spPath == "" {
+		fmt.Println("  程序目录里没找到 server.properties。")
+		fmt.Println("  如果 BDS 在别的文件夹/机器，请手动确认这 3 行：")
+		fmt.Println("        transport=nethernet")
+		fmt.Println("        #server-udp-ports=   ← 保持注释，别填端口")
+		fmt.Println("        server-port=xxx      ← 别和本程序玩家端口相同")
+	} else if data, err := os.ReadFile(spPath); err != nil {
+		fmt.Printf("  读取 %s 失败：%v（请手动检查）\n", spPath, err)
+	} else {
+		listenP := mustPort(c.Listen)
+		alt := freeTCPPort(19131, 19130, 19134, 19135, listenP+1)
+		bdsHost, _, _ := net.SplitHostPort(c.BDS)
+		fix := planServerPropertiesFix(string(data), listenP, alt, hostIsLocal(bdsHost))
+		if len(fix.changes) == 0 {
+			fmt.Println("  ✓ 检查通过：transport 和端口配置都没问题，无需修改")
+		} else {
+			fmt.Println("  发现以下问题：")
+			for i, ch := range fix.changes {
+				fmt.Printf("        %d. %s\n", i+1, ch)
+			}
+			if askYesNo(w, "  自动修正吗？（会先把原文件备份）", true) {
+				if err := saveServerPropertiesFixed(spPath, data, fix.content); err != nil {
+					fmt.Println("  × 修正失败：", err)
+				} else {
+					spFixed = true
+					fmt.Println("  ✓ 已修正，原文件已备份（文件名带 .bak-日期）")
+					if fix.newBDSPort != 0 {
+						c.BDS = bdsHost + ":" + strconv.Itoa(fix.newBDSPort)
+						fmt.Printf("  ✓ 本程序将连接 BDS 新端口 %d\n", fix.newBDSPort)
+					}
+					fmt.Println("  ⚠ 注意：改完 server.properties 需要重启 BDS 才生效！")
+				}
+			} else {
+				fmt.Println("  已跳过。请手动修改，否则玩家可能进不来（尤其是重连）")
+			}
+		}
+	}
+
 	// ── 摘要 ──
 	fmt.Println()
 	fmt.Println("----------------------------------------------------------")
@@ -174,11 +229,11 @@ func runWizard(savePath string) *config {
 	fmt.Printf("        TCP %d（玩家连接）\n", c.AdvertiseTCPPort)
 	fmt.Printf("        UDP %d（游戏数据）\n", c.AdvertisePort)
 	fmt.Println()
-	fmt.Println("  ★ 检查 BDS 文件夹里 server.properties 的这几行：")
-	fmt.Println("        transport=nethernet")
-	fmt.Printf("        server-port=%d        ← 保持这样，别改\n", mustPort(c.BDS))
-	fmt.Println("        #server-udp-ports=      ← 默认带 # 号（注释）就对了，")
-	fmt.Println("                                   千万别取消注释、别填端口！")
+	if spFixed {
+		fmt.Println("  ★ server.properties 已自动修正——记得重启 BDS！")
+	} else if spPath != "" {
+		fmt.Println("  ★ server.properties 已检查，配置正确")
+	}
 
 	if savePath != "" {
 		fmt.Println()

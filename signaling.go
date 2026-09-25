@@ -161,6 +161,14 @@ func (s *signalingServer) handleSDPExchange(w http.ResponseWriter, r *http.Reque
 	serverUfrag := firstSubmatch(reIceUfrag, string(answer))
 	icePwd := firstSubmatch(reIcePwd, string(answer))
 	bdsAddrs := parseCandidateAddrs(string(answer))
+	// 游戏端口与信令端口同号：几乎可以断定 server-udp-ports 被固定为单端口
+	// （正常应每玩家一个独立临时端口）。第一时间点破，避免用户排查弯路。
+	if len(bdsAddrs) > 0 && bdsAddrs[0].Port == mustPort(s.bds) && bdsAddrs[0].Port != 0 {
+		log.Printf("[signal] 提示：BDS 游戏端口与信令端口同为 %d——BDS 很可能配置了 "+
+			"server-udp-ports=%d（固定单端口）。这会导致玩家重连失败、第二个玩家进不来，"+
+			"请注释掉 server.properties 里的 server-udp-ports 并重启 BDS（本代理无需固定端口）",
+			bdsAddrs[0].Port, bdsAddrs[0].Port)
+	}
 	if len(bdsAddrs) == 0 {
 		log.Printf("[signal] 会话 %s：answer 无候选地址（后端拒绝连接？）body=%q",
 			networkID, truncateBody(answer, 120))

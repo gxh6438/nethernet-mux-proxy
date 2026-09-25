@@ -104,11 +104,14 @@ func (t *sessionTable) register(networkID, clientUfrag, serverUfrag, icePwd stri
 	for p := range s.bdsPorts {
 		for old := range t.sessions {
 			if old != s && old.bdsPorts[p] {
-				// 正常 BDS 每连接独立 socket，端口不应重叠；出现重叠多为
-				// BDS 重启后的端口复用（旧会话已死）或极端巧合。后者覆盖前者
-				// 并记录，避免静默串话。
-				log.Printf("[session] 警告：会话 %s 与 %s 的 BDS 端口 %d 重叠（BDS 重启？），按最新会话处理",
-					old.networkID, s.networkID, p)
+				// 正常 BDS 每连接独立 socket，端口不应重叠。最常见原因是
+				// server-udp-ports 被固定为单端口：旧连接占着端口不放，
+				// 新连接绑定失败成为死会话（客户端 Door 超时）。按最新会话
+				// 处理并明确提示，避免静默串话。
+				log.Printf("[session] 警告：会话 %s 与 %s 的 BDS 端口 %d 重叠，按最新会话处理。"+
+					"若 BDS 配置了 server-udp-ports=%d（固定单端口），请注释掉该项并重启 BDS——"+
+					"固定单端口会导致重连/第二个玩家失败，本代理不需要固定端口",
+					old.networkID, s.networkID, p, p)
 				break
 			}
 		}

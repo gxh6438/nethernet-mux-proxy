@@ -66,15 +66,16 @@ func isLocalAddr(a *net.UDPAddr) bool {
 
 // options 运行参数（flag / 配置文件 / 向导三来源归一）。
 type options struct {
-	Listen        string // 对外 TCP 信令监听
-	BDS           string // BDS 信令后端
-	Mux           string // 对外 UDP mux 监听
-	AdvertiseIP   string
-	AdvertisePort int
-	Idle          time.Duration
-	MaxSessions   int
-	MaxAddrs      int
-	InsecureClaim bool
+	Listen           string // 对外 TCP 信令监听
+	BDS              string // BDS 信令后端
+	Mux              string // 对外 UDP mux 监听
+	AdvertiseIP      string // IP 字面量或域名（启动时解析为 IP）
+	AdvertisePort    int    // 通告公网 UDP 端口
+	AdvertiseTCPPort int    // 通告公网 TCP 端口（仅提示玩家用）
+	Idle             time.Duration
+	MaxSessions      int
+	MaxAddrs         int
+	InsecureClaim    bool
 }
 
 func main() {
@@ -96,11 +97,11 @@ func main() {
 		}
 		opts.AdvertisePort, _ = strconv.Atoi(portStr)
 	}
-	if ip := net.ParseIP(opts.AdvertiseIP); ip == nil {
-		fatal("通告 IP %q 不是合法的 IP 地址\n  请检查 proxy.json 里的 advertise_ip，或删掉它重新运行向导", opts.AdvertiseIP)
-	} else if ip.IsPrivate() {
-		log.Printf("[main] 警告：通告 IP %s 是内网地址——仅局域网联机可用；公网部署请填写公网 IP", opts.AdvertiseIP)
+	if opts.AdvertiseTCPPort == 0 {
+		opts.AdvertiseTCPPort, _ = strconv.Atoi(hostPortOnly(opts.Listen))
 	}
+	// SDP candidate 里只能写 IP 字面量：域名在此解析（面板/DDNS 场景填域名）
+	opts.AdvertiseIP = resolveAdvertiseHost(opts.AdvertiseIP)
 
 	table := newSessionTable(opts.Idle, opts.MaxSessions, opts.MaxAddrs, opts.InsecureClaim)
 
@@ -112,13 +113,17 @@ func main() {
 
 	log.Printf("[main] nethernet-mux-proxy 启动：信令 %s → %s | mux %s，通告 %s:%d",
 		opts.Listen, opts.BDS, opts.Mux, opts.AdvertiseIP, opts.AdvertisePort)
+	if opts.AdvertiseTCPPort != mustPort(opts.Listen) {
+		log.Printf("[main] 检测到端口映射：外网 TCP %d → 内网 %s（面板/NAT 转发）",
+			opts.AdvertiseTCPPort, hostPortOnly(opts.Listen))
+	}
 	if !opts.InsecureClaim {
 		log.Printf("[main] STUN 认领验证已启用（MESSAGE-INTEGRITY）")
 	} else {
 		log.Printf("[main] 警告：-insecure-claim 已开启，STUN 认领不做完整性验证")
 	}
-	log.Printf("[main] 玩家连接地址：%s 端口 %s（游戏中「添加服务器」填这两项）",
-		opts.AdvertiseIP, hostPortOnly(opts.Listen))
+	log.Printf("[main] 玩家连接地址：%s 端口 %d（游戏中「添加服务器」填这两项）",
+		opts.AdvertiseIP, opts.AdvertiseTCPPort)
 
 	if err := runSignaling(ctx, opts, table); err != nil && ctx.Err() == nil {
 		fatal("信令服务出错退出：%v", err)
@@ -145,6 +150,37 @@ func guessPublicIP() string {
 	return "127.0.0.1"
 }
 
+// resolveAdvertiseHost 把通告地址归一为 IP 字面量（SDP candidate 只能写 IP）：
+// 本身是 IP 则原样返回；是域名则 DNS 解析（优先 IPv4）。
+func resolveAdvertiseHost(host string) string {
+	if ip := net.ParseIP(host); ip != nil {
+		if ip.IsPrivate() {
+			log.Printf("[main] 警告：通告 IP %s 是内网地址——仅局域网联机可用；公网部署请填写公网 IP 或域名", host)
+		}
+		return host
+	}
+	ips, err := net.LookupIP(host)
+	if err != nil {
+		fatal("通告地址 %q 既不是 IP，域名也解析失败：%v\n  请检查 proxy.json 里的 advertise_ip（公网 IP 或域名均可）", host, err)
+	}
+	var v6 net.IP
+	for _, ip := range ips {
+		if v4 := ip.To4(); v4 != nil {
+			log.Printf("[main] 通告域名 %s 已解析为 %s（重启本程序会重新解析）", host, v4)
+			return v4.String()
+		}
+		if v6 == nil {
+			v6 = ip
+		}
+	}
+	if v6 != nil {
+		log.Printf("[main] 通告域名 %s 只解析出 IPv6 %s（无 IPv4 记录）", host, v6)
+		return v6.String()
+	}
+	fatal("通告域名 %q 没有解析出任何 IP 地址", host)
+	return ""
+}
+
 func runStats(t *sessionTable) {
 	for range time.Tick(60 * time.Second) {
 		t.gc()
@@ -160,8 +196,9 @@ func parseArgsAndConfig() *options {
 	listenTCP := fs.String("listen", "", "对外 TCP 监听地址（信令前置，玩家连接的端口）")
 	bdsTCP := fs.String("bds", "", "BDS NetherNet 信令后端（BDS 的 server-port）")
 	muxBind := fs.String("mux", "", "UDP mux 监听地址（所有玩家的游戏流量共用）")
-	advIP := fs.String("advertise-ip", "", "通告给客户端的公网 IP（NAT 部署必填）")
+	advIP := fs.String("advertise-ip", "", "通告给客户端的公网 IP 或域名（域名启动时解析；NAT/面板部署必填）")
 	advPort := fs.Int("advertise-port", 0, "通告给客户端的公网 UDP 端口（默认同 mux 监听端口）")
+	advTCP := fs.Int("advertise-tcp-port", 0, "通告给玩家的公网 TCP 端口（默认同 listen；仅提示用）")
 	idle := fs.Duration("idle", 0, "会话空闲回收时间")
 	maxSessions := fs.Int("max-sessions", 0, "最大并发会话数（默认 1024）")
 	maxAddrs := fs.Int("max-addrs", 0, "每会话客户端地址数上限（默认 16）")
@@ -192,15 +229,16 @@ func parseArgsAndConfig() *options {
 	}
 
 	opts := &options{
-		Listen:        orDefault(cfg.Listen, ":19132"),
-		BDS:           orDefault(cfg.BDS, "127.0.0.1:19132"),
-		Mux:           orDefault(cfg.Mux, ":19133"),
-		AdvertiseIP:   cfg.AdvertiseIP,
-		AdvertisePort: cfg.AdvertisePort,
-		Idle:          orDur(cfg.Idle, 5*time.Minute),
-		MaxSessions:   orInt(cfg.MaxSessions, 1024),
-		MaxAddrs:      orInt(cfg.MaxAddrs, 16),
-		InsecureClaim: cfg.InsecureClaim,
+		Listen:           orDefault(cfg.Listen, ":19132"),
+		BDS:              orDefault(cfg.BDS, "127.0.0.1:19132"),
+		Mux:              orDefault(cfg.Mux, ":19133"),
+		AdvertiseIP:      cfg.AdvertiseIP,
+		AdvertisePort:    cfg.AdvertisePort,
+		AdvertiseTCPPort: cfg.AdvertiseTCPPort,
+		Idle:             orDur(cfg.Idle, 5*time.Minute),
+		MaxSessions:      orInt(cfg.MaxSessions, 1024),
+		MaxAddrs:         orInt(cfg.MaxAddrs, 16),
+		InsecureClaim:    cfg.InsecureClaim,
 	}
 
 	// 命令行 flags 覆盖配置文件
@@ -218,6 +256,9 @@ func parseArgsAndConfig() *options {
 	}
 	if *advPort != 0 {
 		opts.AdvertisePort = *advPort
+	}
+	if *advTCP != 0 {
+		opts.AdvertiseTCPPort = *advTCP
 	}
 	if *idle != 0 {
 		opts.Idle = *idle

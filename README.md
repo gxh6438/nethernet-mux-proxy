@@ -161,8 +161,8 @@ chmod +x nethernet-mux-proxy-linux-amd64
 | [1/5] | 玩家连接用的端口（TCP） | 玩家在游戏里「添加服务器」填的端口。**程序会自动避开已被占用的端口**（比如 BDS 正在用的 19132）。面板只给了特定 TCP 端口就填那个 |
 | [2/5] | Minecraft 服务端（BDS）的地址 | 默认 `127.0.0.1:19132`（代理和 BDS 同机，最常见）。BDS 在别的机器填那台机器的地址，如 `192.168.1.100:19132`。向导自动检测连通性；**同机时代理端口与 BDS 端口撞车会自动提醒并换成空闲端口** |
 | [3/5] | 游戏数据用的端口（UDP） | 所有玩家的游戏数据共用的 UDP 端口，默认 19133。面板只给了特定 UDP 端口就填那个（TCP 和 UDP 是两种端口，数字相同也不冲突） |
-| [4/5] | 服务器的对外 IP | 玩家拿这个 IP 连你。向导自动检测；检测出 192.168 / 10. / 172.16~31 开头说明是内网地址（局域网联机没问题），公网/面板部署改填公网 IP |
-| [5/5] | 外网 UDP 映射端口 | 只有「面板/路由器把外部 UDP 端口映射成了不同的数字」才需要改，一般直接回车 |
+| [4/5] | 服务器的对外 IP 或域名 | 玩家拿这个地址连你。填**公网 IP 或域名**（面板给的 `play.xxx.cn` 也可以，程序启动时自动解析成 IP）。向导自动检测本机 IP；检测出 192.168 / 10. / 172.16~31 开头说明是内网地址（局域网联机没问题） |
+| [5/5] | 外网映射端口（TCP + UDP） | 面板/路由器把外网端口映射成和内网不同数字时填**外网的**（如外网 29011 → 内网 19132 就填 29011）；外网内网一样的话直接回车 |
 
 ### 三、BDS 侧设置（重要！）
 
@@ -201,16 +201,20 @@ Minecraft 基岩版 → 游戏 → 服务器 → 添加服务器：
 ```json
 {
   "listen": ":19132",
-  "bds": "127.0.0.1:19132",
-  "mux": ":19133",
-  "advertise_ip": "203.0.113.10",
-  "advertise_port": 19133,
+  "bds": "127.0.0.1:19131",
+  "mux": ":19132",
+  "advertise_ip": "play.example.com",
+  "advertise_port": 29011,
+  "advertise_tcp_port": 29011,
   "idle": "5m",
   "max_sessions": 1024,
   "max_addrs": 16,
   "insecure_claim": false
 }
 ```
+
+- `advertise_ip` 可以填**公网 IP 或域名**；域名会在启动时解析成 IP（SDP candidate 要求 IP 字面量），重启后重新解析
+- `advertise_port` 是**外网 UDP 端口**（玩家游戏数据实际访问的），`advertise_tcp_port` 是**外网 TCP 端口**（玩家「添加服务器」填的，仅提示用）；外网内网端口相同时可省略
 
 优先级：**命令行 flags > 配置文件 > 默认值**。零参数且无配置文件时进入向导。
 
@@ -220,8 +224,9 @@ Minecraft 基岩版 → 游戏 → 服务器 → 添加服务器：
 -listen ADDR        对外 TCP 监听（信令前置，玩家连接的端口）
 -bds ADDR           BDS NetherNet 信令后端（BDS 的 server-port）
 -mux ADDR           UDP mux 监听（所有玩家游戏流量共用）
--advertise-ip IP    通告给客户端的公网 IP（NAT/面板部署必填）
+-advertise-ip HOST  通告给客户端的公网 IP 或域名（域名启动时解析；NAT/面板部署必填）
 -advertise-port N   通告的公网 UDP 端口（默认同 mux 监听端口）
+-advertise-tcp-port N  通告给玩家的公网 TCP 端口（默认同 listen；仅提示用）
 -idle DUR           会话空闲回收时间（默认 5m）
 -max-sessions N     最大并发会话数（默认 1024）
 -max-addrs N        每会话客户端地址数上限（默认 16）
@@ -322,6 +327,15 @@ go build -o testbin/attacker ./attacker
 
 **启动报"端口没法监听 / address already in use"？**
 最常见是 BDS 的 server-port 和代理端口撞了（默认都是 19132）。程序会打印具体原因和解决办法（Windows 下不会闪退，会停住等你按回车）。最简单的处理：删掉 proxy.json 重新运行，向导会自动挑一个空闲端口。
+
+**通告地址可以填域名吗（比如面板给的 play.xxx.cn）？**
+可以。域名会在启动时解析成 IP 写进 SDP candidate（candidate 只接受 IP 字面量），重启后重新解析。外网端口和内网不同时，记得同时设置 `advertise_port`（外网 UDP）和 `advertise_tcp_port`（外网 TCP）。
+
+**Linux 怎么后台一键启动？**
+```bash
+nohup ./nethernet-mux-proxy-linux-amd64 > proxy.log 2>&1 &
+```
+停止：`pkill -x nethernet-mux-proxy`；看日志：`tail -f proxy.log`。
 
 **日志出现"拒绝...MESSAGE-INTEGRITY 验证失败"？**
 正常，这是代理在拦截伪造/重放的包，不是故障。

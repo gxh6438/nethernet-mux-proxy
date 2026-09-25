@@ -53,6 +53,34 @@ func TestMustPort(t *testing.T) {
 	}
 }
 
+func TestLooksLikeHost(t *testing.T) {
+	valid := []string{"203.0.113.10", "::1", "play.simpfun.cn", "a-b.example.com", "xn--fiqs8s.cn"}
+	for _, s := range valid {
+		if !looksLikeHost(s) {
+			t.Fatalf("%q 应为合法的 IP/域名", s)
+		}
+	}
+	invalid := []string{"", "abc", "a b.com", "-bad.com", "bad-.com", "what"}
+	for _, s := range invalid {
+		if looksLikeHost(s) {
+			t.Fatalf("%q 不应通过校验", s)
+		}
+	}
+}
+
+func TestResolveAdvertiseHost(t *testing.T) {
+	if got := resolveAdvertiseHost("1.2.3.4"); got != "1.2.3.4" {
+		t.Fatalf("IP 应原样返回，got %q", got)
+	}
+	if got := resolveAdvertiseHost("::1"); got != "::1" {
+		t.Fatalf("IPv6 应原样返回，got %q", got)
+	}
+	// localhost 经 /etc/hosts 解析，应优先给出 IPv4 回环
+	if got := resolveAdvertiseHost("localhost"); got != "127.0.0.1" {
+		t.Fatalf("localhost 应解析为 127.0.0.1，got %q", got)
+	}
+}
+
 func TestIsAddrInUse(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

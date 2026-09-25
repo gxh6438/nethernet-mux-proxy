@@ -114,36 +114,44 @@ func runWizard(savePath string) *config {
 		c.Mux = ":" + strconv.Itoa(p)
 	}
 
-	// ── 第 4 步：公网 IP ──
+	// ── 第 4 步：对外 IP 或域名 ──
 	fmt.Println()
-	fmt.Println("【第 4 步，共 5 步】服务器的对外 IP")
+	fmt.Println("【第 4 步，共 5 步】服务器的对外 IP 或域名")
 	fmt.Println()
 	guessed := guessPublicIP()
-	fmt.Printf("  玩家拿这个 IP 连你。程序自动检测到：%s\n", guessed)
+	fmt.Printf("  玩家拿这个地址连你。程序自动检测到本机 IP：%s\n", guessed)
 	if ip := net.ParseIP(guessed); ip != nil && ip.IsPrivate() {
 		fmt.Println()
 		fmt.Println("  ! 检测到的是内网地址（192.168 / 10. / 172.16~31 开头）")
-		fmt.Println("    → 局域网联机没问题；要让外网玩家进，")
-		fmt.Println("      需改填公网 IP（面板/云服务器商家会提供）")
+		fmt.Println("    → 局域网联机没问题；用面板/云服务器的话，")
+		fmt.Println("      请改填面板给你的公网 IP 或域名（如 play.xxx.cn）")
 	}
 	fmt.Println()
-	ip := askDefault(w, "IP", guessed)
-	for net.ParseIP(ip) == nil {
-		fmt.Println("  × 这不是一个有效的 IP 地址，例如 203.0.113.10")
-		ip = askDefault(w, "IP", guessed)
+	fmt.Println("  ▸ 填 IP（如 203.0.113.10）或域名（如 play.example.com）都可以")
+	fmt.Println("  ▸ 填域名的话，程序启动时会自动解析成 IP")
+	host := askDefault(w, "IP/域名", guessed)
+	for !looksLikeHost(host) {
+		fmt.Println("  × 格式不对：应填 IP（203.0.113.10）或域名（play.example.com）")
+		host = askDefault(w, "IP/域名", guessed)
 	}
-	c.AdvertiseIP = ip
+	c.AdvertiseIP = host
 
-	// ── 第 5 步：外网 UDP 映射端口 ──
+	// ── 第 5 步：外网映射端口（TCP + UDP）──
 	fmt.Println()
-	fmt.Println("【第 5 步，共 5 步】外网 UDP 映射端口")
+	fmt.Println("【第 5 步，共 5 步】外网映射端口")
 	fmt.Println()
-	fmt.Println("  只有这一种情况需要改：面板/路由器把「外部 UDP 端口」")
-	fmt.Println("  映射成了和内部不同的数字（例如外部 20000 → 内部 19133），")
-	fmt.Println("  这时填外部的那个数字。其他情况直接回车！")
+	fmt.Println("  面板/路由器常把「外网端口」映射成和内网不同的数字")
+	fmt.Println("  （例如外网 29011 → 内网 19132）。")
+	fmt.Println("  外网和内网端口号一样的话，这一步全部直接回车！")
+	fmt.Println()
+	defTCP := mustPort(c.Listen)
+	c.AdvertiseTCPPort = defTCP
+	if p, ok := askPort(w, "外网 TCP 端口（玩家连接）", defTCP); ok {
+		c.AdvertiseTCPPort = p
+	}
 	defAdv := mustPort(c.Mux)
 	c.AdvertisePort = defAdv
-	if p, ok := askPort(w, "端口", defAdv); ok {
+	if p, ok := askPort(w, "外网 UDP 端口（游戏数据）", defAdv); ok {
 		c.AdvertisePort = p
 	}
 
@@ -154,11 +162,17 @@ func runWizard(savePath string) *config {
 	fmt.Println("----------------------------------------------------------")
 	fmt.Println()
 	fmt.Println("  ★ 玩家这样进服（游戏 → 服务器 → 添加服务器）：")
-	fmt.Printf("        地址：%s    端口：%d\n", c.AdvertiseIP, mustPort(c.Listen))
+	fmt.Printf("        地址：%s    端口：%d\n", c.AdvertiseIP, c.AdvertiseTCPPort)
 	fmt.Println()
-	fmt.Println("  ★ 防火墙 / 面板需要放行这 2 个端口：")
-	fmt.Printf("        TCP %d（玩家连接）\n", mustPort(c.Listen))
-	fmt.Printf("        UDP %d（游戏数据）\n", mustPort(c.Mux))
+	if c.AdvertiseTCPPort != mustPort(c.Listen) || c.AdvertisePort != mustPort(c.Mux) {
+		fmt.Println("  ★ 你的端口映射（外网 → 内网）：")
+		fmt.Printf("        TCP 外网 %d → 内网 %d\n", c.AdvertiseTCPPort, mustPort(c.Listen))
+		fmt.Printf("        UDP 外网 %d → 内网 %d\n", c.AdvertisePort, mustPort(c.Mux))
+		fmt.Println()
+	}
+	fmt.Println("  ★ 防火墙 / 面板需要放行这 2 个外网端口：")
+	fmt.Printf("        TCP %d（玩家连接）\n", c.AdvertiseTCPPort)
+	fmt.Printf("        UDP %d（游戏数据）\n", c.AdvertisePort)
 	fmt.Println()
 	fmt.Println("  ★ 检查 BDS 文件夹里 server.properties 的这几行：")
 	fmt.Println("        transport=nethernet")
@@ -253,7 +267,7 @@ func freeTCPPort(candidates ...int) int {
 	return ln.Addr().(*net.TCPAddr).Port
 }
 
-// hostIsLocal 判断地址是否指向本机（用于"代理端口与 BDS 端口同机冲突"检测）。
+// hostIsLocal 判断地址是否指向本机（用于"代理与 BDS 端口同机冲突"检测）。
 func hostIsLocal(host string) bool {
 	if host == "" {
 		return true
@@ -265,4 +279,28 @@ func hostIsLocal(host string) bool {
 		return localIPs[ip.String()]
 	}
 	return strings.EqualFold(host, "localhost")
+}
+
+// looksLikeHost 校验"IP 或域名"的书写格式（不做 DNS 解析，启动时才真正解析）。
+func looksLikeHost(s string) bool {
+	if net.ParseIP(s) != nil {
+		return true
+	}
+	if len(s) < 4 || len(s) > 253 || !strings.Contains(s, ".") {
+		return false
+	}
+	for _, label := range strings.Split(s, ".") {
+		if label == "" || len(label) > 63 {
+			return false
+		}
+		for _, r := range label {
+			if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-') {
+				return false
+			}
+		}
+		if label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+	}
+	return true
 }

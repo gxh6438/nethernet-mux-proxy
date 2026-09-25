@@ -19,7 +19,7 @@ import (
 func runMux(bind string, t *sessionTable) {
 	conn, err := net.ListenPacket("udp", bind)
 	if err != nil {
-		log.Fatalf("[mux] UDP 监听失败 %s: %v", bind, err)
+		fatalBind("UDP", bind, err)
 	}
 	if uc, ok := conn.(*net.UDPConn); ok {
 		// 提高内核接收缓冲，降低高 pps 下的丢包

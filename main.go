@@ -92,12 +92,12 @@ func main() {
 	if opts.AdvertisePort == 0 {
 		_, portStr, err := net.SplitHostPort(opts.Mux)
 		if err != nil {
-			log.Fatalf("mux 地址格式错误: %v", err)
+			fatal("配置里 mux 地址格式不对：%v\n  正确写法如 \":19133\"；删掉 proxy.json 重新运行本程序可进入设置向导", err)
 		}
 		opts.AdvertisePort, _ = strconv.Atoi(portStr)
 	}
 	if ip := net.ParseIP(opts.AdvertiseIP); ip == nil {
-		log.Fatalf("通告 IP %q 不是合法地址", opts.AdvertiseIP)
+		fatal("通告 IP %q 不是合法的 IP 地址\n  请检查 proxy.json 里的 advertise_ip，或删掉它重新运行向导", opts.AdvertiseIP)
 	} else if ip.IsPrivate() {
 		log.Printf("[main] 警告：通告 IP %s 是内网地址——仅局域网联机可用；公网部署请填写公网 IP", opts.AdvertiseIP)
 	}
@@ -121,7 +121,7 @@ func main() {
 		opts.AdvertiseIP, hostPortOnly(opts.Listen))
 
 	if err := runSignaling(ctx, opts, table); err != nil && ctx.Err() == nil {
-		log.Fatalf("[main] 信令前置退出: %v", err)
+		fatal("信令服务出错退出：%v", err)
 	}
 	log.Printf("[main] 已退出")
 }
@@ -177,7 +177,7 @@ func parseArgsAndConfig() *options {
 	case *cfgPath != "":
 		c, err := loadConfig(*cfgPath)
 		if err != nil {
-			log.Fatalf("读取配置 %s 失败: %v", *cfgPath, err)
+			fatal("读取配置文件 %s 失败：%v\n  若改不明白，删除该文件后重新运行本程序会进入设置向导", *cfgPath, err)
 		}
 		cfg = c
 	default:

@@ -71,8 +71,14 @@ func runSignaling(ctx context.Context, opts *options, table *sessionTable) error
 		IdleTimeout:       120 * time.Second,
 	}
 
+	// 先显式 Listen：失败（最常见为端口被占用）立即给出友好报错，
+	// 而不是把错误塞进 channel 后以笼统日志退出。
+	ln, err := net.Listen("tcp", opts.Listen)
+	if err != nil {
+		fatalBind("TCP", opts.Listen, err)
+	}
 	errCh := make(chan error, 1)
-	go func() { errCh <- srv.ListenAndServe() }()
+	go func() { errCh <- srv.Serve(ln) }()
 	select {
 	case err := <-errCh:
 		return err

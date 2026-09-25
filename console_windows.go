@@ -6,6 +6,9 @@ package main
 // 保证中文提示与横线样式在 cmd/PowerShell 下正常显示。
 // 注：golang.org/x/sys 未封装 SetConsoleOutputCP，直接经 kernel32 调用。
 import (
+	"bufio"
+	"fmt"
+	"os"
 	"syscall"
 
 	"golang.org/x/sys/windows"
@@ -21,4 +24,10 @@ func platformInit() {
 			_ = windows.SetConsoleMode(h, mode|windows.ENABLE_VIRTUAL_TERMINAL_PROCESSING)
 		}
 	}
+}
+
+// waitExit Windows：等用户按回车再退出，避免双击运行报错时窗口一闪而过。
+func waitExit() {
+	fmt.Print("\n按「回车键」退出...")
+	_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
 }

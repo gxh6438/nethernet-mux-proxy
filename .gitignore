@@ -1,0 +1,12 @@
+# 运行时生成的本地配置
+proxy.json
+
+# 测试中间产物
+testbin/
+
+# 发布产物走 GitHub Release，不入库
+dist/
+
+# Go
+*.test
+*.out
